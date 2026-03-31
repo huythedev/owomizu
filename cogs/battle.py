@@ -73,7 +73,12 @@ class Battle(commands.Cog):
                 cmd_name = self._get_cmd_name()
                 prefix = self.bot.settings_dict.get("setprefix", "owo ")
                 silent = self.bot.global_settings_dict.get("silentTextMessages", False)
-                await self.bot.cm.send(f"{prefix}{cmd_name}", silent=silent)
+                await self.bot.send(
+                    f"{prefix}{cmd_name}",
+                    channel=self.bot.cm,
+                    silent=silent,
+                    typingIndicator=False,
+                )
 
                 cd = self._get_cooldown()
                 sleep_time = (

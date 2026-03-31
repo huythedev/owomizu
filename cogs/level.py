@@ -6,6 +6,7 @@ Copyright (C) 2025 Kiy0w0
 
 import string
 import random
+import os
 
 
 from discord.ext import commands
@@ -15,6 +16,7 @@ import asyncio
 
 
 quotes_url = "https://favqs.com/api/qotd"
+SENTENCES_FILE = "config/sentences.txt"
 
 def generate_random_string(min, max):
     """something like a list?"""
@@ -31,6 +33,17 @@ async def fetch_quotes(session):
             return quote
 
 
+def load_sentences_from_file(path=SENTENCES_FILE):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            # Each non-empty line is treated as a sentence candidate.
+            return [line.strip() for line in f if line.strip()]
+    except OSError:
+        return []
+
+
 
 class Level(commands.Cog):
     def __init__(self, bot):
@@ -43,16 +56,27 @@ class Level(commands.Cog):
             "checks": True,
             "id": "level"
         }
+        self.sentences = []
+
+    def _pick_level_message(self, cnf):
+        if cnf.get("useQuoteInstead", False):
+            if self.sentences:
+                return random.choice(self.sentences)
+            return None
+        return generate_random_string(cnf["minLengthForRandomString"], cnf["maxLengthForRandomString"])
 
     async def start_level_grind(self):
         #await asyncio.sleep(1)
         await self.bot.remove_queue(id="level")
         cnf = self.bot.settings_dict["commands"]["lvlGrind"]
         try:
+            self.sentences = load_sentences_from_file()
             await self.bot.sleep_till(cnf["cooldown"])
-            if cnf["useQuoteInstead"]:
+            self.last_level_grind_message = self._pick_level_message(cnf)
+            if self.last_level_grind_message is None:
+                # Fallback to API quote when sentence file has no usable lines.
                 self.last_level_grind_message = await fetch_quotes(self.bot.session)
-            else:
+            if not self.last_level_grind_message:
                 self.last_level_grind_message = generate_random_string(cnf["minLengthForRandomString"], cnf["maxLengthForRandomString"])
             self.cmd["cmd_name"] = self.last_level_grind_message
 

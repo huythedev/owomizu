@@ -57,6 +57,7 @@ class MyClient(commands.Bot):
         self.global_settings_dict = global_settings_dict
         self.commands_dict = {}
         self.lock = asyncio.Lock()
+        self.send_lock = asyncio.Lock()
         self.cash_check = False
         self.boss_channel_id = 0
         self.local_headers = {}
@@ -84,6 +85,11 @@ class MyClient(commands.Bot):
             "sleep": False,
             "hold_handler": False,
             "rate_limited": False
+        }
+        self.send_backoff = {
+            "next_allowed_at": 0.0,
+            "penalty": 0.0,
+            "last_rate_limited_at": 0.0,
         }
 
         with open("config/misc.json", "r") as config_file:
@@ -209,6 +215,16 @@ class MyClient(commands.Bot):
 
             with open(config_path, "r") as config_file:
                 self.settings_dict = json.load(config_file)
+                self.settings_dict.setdefault("defaultCooldowns", {})
+                self.settings_dict["defaultCooldowns"].setdefault(
+                    "sendThrottle",
+                    {
+                        "enabled": True,
+                        "baseDelay": [0.7, 1.6],
+                        "rateLimitBackoff": [4.0, 7.0],
+                        "maxPenalty": 25.0,
+                    },
+                )
 
             await self.start_cogs()
 
@@ -579,6 +595,91 @@ class MyClient(commands.Bot):
                 )
             )
 
+    def _send_throttle_config(self):
+        defaults = {
+            "enabled": True,
+            "baseDelay": [0.7, 1.6],
+            "rateLimitBackoff": [4.0, 7.0],
+            "maxPenalty": 25.0,
+        }
+        cfg = self.settings_dict.get("defaultCooldowns", {}).get("sendThrottle", {})
+        return {
+            "enabled": cfg.get("enabled", defaults["enabled"]),
+            "baseDelay": cfg.get("baseDelay", defaults["baseDelay"]),
+            "rateLimitBackoff": cfg.get("rateLimitBackoff", defaults["rateLimitBackoff"]),
+            "maxPenalty": cfg.get("maxPenalty", defaults["maxPenalty"]),
+        }
+
+    async def wait_for_send_slot(self, bypass=False):
+        if bypass:
+            return
+
+        cfg = self._send_throttle_config()
+        if not cfg["enabled"]:
+            return
+
+        async with self.send_lock:
+            now = time.time()
+            wait_for = max(0.0, self.send_backoff["next_allowed_at"] - now)
+            wait_for += self.random_float(cfg["baseDelay"])
+            self.send_backoff["next_allowed_at"] = now + wait_for
+        if wait_for > 0:
+            await asyncio.sleep(wait_for)
+
+    def _decay_send_penalty(self):
+        # Slowly decay successful-send penalty so transient spikes recover.
+        self.send_backoff["penalty"] = max(0.0, self.send_backoff["penalty"] * 0.65)
+
+    def _increase_send_backoff(self, retry_after=None):
+        cfg = self._send_throttle_config()
+        penalty_increment = float(retry_after) if retry_after else self.random_float(cfg["rateLimitBackoff"])
+        current = self.send_backoff["penalty"]
+        max_penalty = float(cfg["maxPenalty"])
+        self.send_backoff["penalty"] = min(max_penalty, current + penalty_increment)
+        self.send_backoff["next_allowed_at"] = max(
+            self.send_backoff["next_allowed_at"],
+            time.time() + self.send_backoff["penalty"],
+        )
+        self.send_backoff["last_rate_limited_at"] = time.time()
+
+    async def _send_message(self, channel, message, silent, typingIndicator, bypass=False):
+        await self.wait_for_send_slot(bypass=bypass)
+        try:
+            if typingIndicator:
+                # Human-like typing calculation
+                char_length = len(message)
+                base_reaction = self.random.uniform(0.5, 1.2)
+                typing_speed_variance = self.random.uniform(0.8, 1.3)
+                estimated_typing_time = (char_length / 6.0) * typing_speed_variance
+                total_delay = min(base_reaction + estimated_typing_time, 4.0)
+
+                async with channel.typing():
+                    await asyncio.sleep(total_delay)
+                    await channel.send(message, silent=silent)
+            else:
+                await channel.send(message, silent=silent)
+
+            self._decay_send_penalty()
+            self.send_backoff["next_allowed_at"] = max(
+                self.send_backoff["next_allowed_at"],
+                time.time() + self.send_backoff["penalty"],
+            )
+            return True
+        except Exception as e:
+            retry_after = float(getattr(e, "retry_after", 0) or 0)
+            status = getattr(e, "status", None)
+            if status == 429 or retry_after > 0:
+                self.command_handler_status["rate_limited"] = True
+                self._increase_send_backoff(retry_after=retry_after if retry_after > 0 else None)
+                await self.log(
+                    f"Send rate-limited. Backing off for {self.send_backoff['penalty']:.1f}s",
+                    "#ff6b6b"
+                )
+                await asyncio.sleep(max(1.0, min(self.send_backoff["penalty"], 30.0)))
+                self.command_handler_status["rate_limited"] = False
+                return False
+            raise
+
     async def upd_cmd_state(self, id, reactionBot=False):
         async with self.lock:
             self.cmds_state["global"]["last_ran"] = time.time()
@@ -786,29 +887,9 @@ class MyClient(commands.Bot):
                 
         if not self.command_handler_status["captcha"] or bypass:
             await self.wait_until_ready()
-            if typingIndicator:
-                # Human-like typing calculation
-                # Average typing speed: 300 CPM (Characters Per Minute) -> 5 chars per second
-                # Base reaction time: 0.5s - 1.5s
-                # Typing time = (Length / 5) * random_variance
-                
-                char_length = len(msg)
-                base_reaction = self.random.uniform(0.5, 1.2)
-                typing_speed_variance = self.random.uniform(0.8, 1.3)
-                estimated_typing_time = (char_length / 6.0) * typing_speed_variance
-                
-                total_delay = base_reaction + estimated_typing_time
-                
-                # Cap delay to avoid overly slow responses for long messages
-                total_delay = min(total_delay, 4.0)
-                
-                # await self.log(f"Typing... ({total_delay:.2f}s)", "#888888")
-                
-                async with channel.typing():
-                    await asyncio.sleep(total_delay)
-                    await channel.send(msg, silent=silent)
-            else:
-                await channel.send(msg, silent=silent)
+            sent = await self._send_message(channel, msg, silent, typingIndicator, bypass=bypass)
+            if not sent:
+                return
             if not disable_log:
                 await self.log(f"Ran: {msg}", color if color else "#5432a8")
             if misspelled:
@@ -816,11 +897,7 @@ class MyClient(commands.Bot):
                 time_val = self.calculate_correction_time(message)
                 await self.log(f"correcting: {msg} -> {message} in {time_val}s", "#422052")
                 await asyncio.sleep(time_val)
-                if typingIndicator:
-                    async with channel.typing():
-                        await channel.send(message, silent=silent)
-                else:
-                    await channel.send(message, silent=silent)
+                await self._send_message(channel, message, silent, typingIndicator, bypass=bypass)
                 await self.set_stat(True, "misspell stop")
 
     async def slashCommandSender(self, msg, color, **kwargs):

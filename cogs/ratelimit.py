@@ -53,6 +53,8 @@ class RateLimitHandler(commands.Cog):
             f"Rate limit hit ({self._rate_limit_count}x) - retry after {retry_after:.1f}s",
             "warning"
         )
+        if hasattr(self.bot, "_increase_send_backoff"):
+            self.bot._increase_send_backoff(retry_after=retry_after)
 
         # If too many rate limits in a short window, pause the bot
         if self._rate_limit_count >= self._pause_threshold and not self._paused:
@@ -137,6 +139,8 @@ class RateLimitHandler(commands.Cog):
                 f"[{self._rate_limit_count}/{self._pause_threshold} in window]",
                 "#ff6b6b"
             )
+            if hasattr(self.bot, "_increase_send_backoff"):
+                self.bot._increase_send_backoff()
             
             if self._rate_limit_count >= self._pause_threshold and not self._paused:
                 await self._auto_pause()

@@ -136,6 +136,7 @@ def main():
                  "briefCooldown": [1, 3],
                  "captchaRestart": [5, 10],
                  "commandHandler": {"betweenCommands": [2, 4], "beforeReaddingToQueue": 7},
+                  "sendThrottle": {"enabled": True, "baseDelay": [0.7, 1.6], "rateLimitBackoff": [4.0, 7.0], "maxPenalty": 25.0},
                  "reactionBot": {"hunt_and_battle": True, "owo": False, "pray_and_curse": False, "cooldown": [1, 2]}
             },
             "richPresence": {
