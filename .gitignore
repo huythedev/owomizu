@@ -136,3 +136,9 @@ mizuowoapi/
 captcha_solver/
 OWOMIZU-Captcha-Solver/
 
+config/settings.json
+config/global_settings.json
+utils/stats.json
+utils/data/db.sqlite-shm
+utils/data/db.sqlite-wal
+utils/data/weekly_runtime.json
