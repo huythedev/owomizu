@@ -75,12 +75,12 @@
             "amount": 1
         },
         "lvlGrind": {
-            "enabled": false,
+            "enabled": true,
             "cooldown": [
                 10,
                 15
             ],
-            "useQuoteInstead": false,
+            "useQuoteInstead": true,
             "minLengthForRandomString": 5,
             "maxLengthForRandomString": 20
         },
